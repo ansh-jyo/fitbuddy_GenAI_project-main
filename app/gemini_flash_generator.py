@@ -15,7 +15,7 @@ if not _api_key:
     raise EnvironmentError("GEMINI_API_KEY is not set in the .env file.")
 
 _client = genai.Client(api_key=_api_key)
-_FLASH_MODEL = "gemini-1.5-flash-latest"  # highest free-tier quota
+_FLASH_MODEL = "gemini-1.5-flash-latestt"  # highest free-tier quota
 
 _RETRY_DELAYS = [5, 15]
 
