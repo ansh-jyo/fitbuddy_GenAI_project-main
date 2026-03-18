@@ -10,7 +10,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
-import google.generativeai as genai
+from google import genai
 
 from database import engine, get_db, Base
 import models
