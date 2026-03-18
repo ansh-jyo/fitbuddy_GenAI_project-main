@@ -58,7 +58,8 @@ fitbuddy/
 
 ---
 
-## Getting Started
+## Getting Started 
+**Modified & customized by shivam jyotishi**
 
 ### Prerequisites
 
@@ -68,8 +69,8 @@ fitbuddy/
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/sohamkadu17/GenAI_project
-cd GenAI_project
+git clone https://github.com/ansh-jyo/fitbuddy_GenAI_Project_AJ.git
+cd fitbuddy_GenAI_Project_AJ
 ```
 
 ### 2. Install Dependencies
@@ -89,7 +90,7 @@ GEMINI_API_KEY=your_actual_gemini_api_key_here
 ### 4. Run the Application
 
 ```bash
-uvicorn app.main:app --reload
+uvicorn main:app --reload
 ```
 
 > **Optional:** Add your own `gym-bg.jpg` to `static/images/` for the background image on the home screen.
@@ -220,3 +221,6 @@ index.html  ──POST /generate──►  routes.py
 ## License
 
 This project is licensed under the MIT License.
+
+## 👨‍💻 Author
+SHIVAM JYOTISHI (Modified version based on original project)
