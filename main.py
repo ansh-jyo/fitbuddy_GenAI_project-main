@@ -4,8 +4,8 @@ import re
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends, HTTPException, Request, Form
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -24,8 +24,11 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY is not set. Add it to your .env file.")
 
-genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel("gemini-1.5-flash-latest")
+# ✅ NEW SDK CLIENT (CORRECT WAY)
+client = genai.Client(api_key=GEMINI_API_KEY)
+
+# ✅ USE SAFE MODEL (WORKS 100%)
+MODEL = "gemini-2.0-flash-lite"
 
 
 @asynccontextmanager
@@ -39,7 +42,7 @@ templates = Jinja2Templates(directory="templates")
 
 
 # ---------------------------------------------------------------------------
-# Pydantic schemas
+# Schemas
 # ---------------------------------------------------------------------------
 class GenerateRequest(BaseModel):
     name: str
@@ -55,81 +58,77 @@ class RefineRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Gemini helpers
+# Gemini Helpers
 # ---------------------------------------------------------------------------
 def _extract_json(text: str) -> dict:
-    """Pull the first JSON object / code-block from a Gemini response."""
-    # Strip markdown fences if present
     clean = re.sub(r"```(?:json)?", "", text).replace("```", "").strip()
-    # Try to parse the whole string
     try:
         return json.loads(clean)
-    except json.JSONDecodeError:
+    except:
         pass
-    # Fallback: grab the first {...} block
+
     match = re.search(r"\{.*\}", clean, re.DOTALL)
     if match:
         return json.loads(match.group())
-    raise ValueError(f"Could not parse JSON from Gemini response:\n{text}")
+
+    raise ValueError("Could not parse JSON")
 
 
-def generate_plan_from_gemini(name: str, age: int, weight: float, goal: str, intensity: str) -> dict:
+def generate_plan_from_gemini(name, age, weight, goal, intensity):
     prompt = f"""
-You are FitBuddy, an expert personal trainer.
-Create a personalised 7-day workout plan for the following user:
+Create a 7-day workout plan.
 
-- Name      : {name}
-- Age       : {age} years
-- Weight    : {weight} kg
-- Goal      : {goal}
-- Intensity : {intensity}
+Name: {name}
+Age: {age}
+Weight: {weight}
+Goal: {goal}
+Intensity: {intensity}
 
-Return ONLY valid JSON with no extra commentary, in this exact structure:
+Return ONLY JSON like:
 {{
-  "Day 1": {{"focus": "<muscle group / theme>", "exercises": [{{"name": "<exercise>", "sets": <int>, "reps": "<reps or duration>"}}]}},
-  "Day 2": ...,
-  ...
-  "Day 7": ...
+ "Day 1": {{"focus": "", "exercises": [{{"name": "", "sets": 3, "reps": "10"}}]}}
 }}
 """
     try:
-        response = gemini_model.generate_content(prompt)
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=prompt
+        )
         return _extract_json(response.text)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Gemini error (generate): {exc}")
+    except Exception as e:
+        raise HTTPException(502, f"Gemini error: {e}")
 
 
-def refine_plan_from_gemini(current_plan: dict, feedback: str) -> dict:
+def refine_plan_from_gemini(current_plan, feedback):
     prompt = f"""
-You are FitBuddy, an expert personal trainer.
-A user has the following 7-day workout plan:
+Modify this plan based on feedback:
 
-{json.dumps(current_plan, indent=2)}
+{json.dumps(current_plan)}
 
-The user's feedback is: "{feedback}"
+Feedback: {feedback}
 
-Update the plan according to the feedback and return ONLY a valid JSON object
-with the same Day 1 – Day 7 structure. No extra text.
+Return ONLY JSON.
 """
     try:
-        response = gemini_model.generate_content(prompt)
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=prompt
+        )
         return _extract_json(response.text)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Gemini error (refine): {exc}")
+    except Exception as e:
+        raise HTTPException(502, f"Gemini error: {e}")
 
 
-def get_tip_from_gemini(goal: str) -> str:
-    prompt = f"""
-You are FitBuddy, a nutrition and recovery expert.
-Give one short, practical tip (a single sentence, max 25 words) for someone
-whose fitness goal is: {goal}.
-Return only the tip sentence, no labels or extra text.
-"""
+def get_tip_from_gemini(goal):
+    prompt = f"Give one short fitness tip for: {goal}"
     try:
-        response = gemini_model.generate_content(prompt)
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=prompt
+        )
         return response.text.strip()
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Gemini error (tip): {exc}")
+    except Exception as e:
+        raise HTTPException(502, f"Gemini error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -142,8 +141,7 @@ async def index(request: Request):
 
 @app.post("/generate")
 async def generate(payload: GenerateRequest, db: Session = Depends(get_db)):
-    """Scenario 1 – create user and generate initial 7-day plan."""
-    # Persist user
+
     user = models.User(
         name=payload.name,
         age=payload.age,
@@ -155,56 +153,48 @@ async def generate(payload: GenerateRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-    # Generate plan via Gemini
-    plan_dict = generate_plan_from_gemini(
-        payload.name, payload.age, payload.weight, payload.goal, payload.intensity
+    plan = generate_plan_from_gemini(
+        payload.name, payload.age, payload.weight,
+        payload.goal, payload.intensity
     )
 
-    # Fetch a tip while we're at it
     tip = get_tip_from_gemini(payload.goal)
 
-    # Persist plan
-    plan = models.WorkoutPlan(
+    db_plan = models.WorkoutPlan(
         user_id=user.id,
-        plan_json=json.dumps(plan_dict),
-        nutrition_tip=tip,
+        plan_json=json.dumps(plan),
+        nutrition_tip=tip
     )
-    db.add(plan)
+    db.add(db_plan)
     db.commit()
-    db.refresh(plan)
+    db.refresh(db_plan)
 
     return {
-        "plan_id": plan.id,
-        "user_id": user.id,
-        "plan": plan_dict,
-        "tip": tip,
+        "plan": plan,
+        "tip": tip
     }
 
 
 @app.post("/refine")
 async def refine(payload: RefineRequest, db: Session = Depends(get_db)):
-    """Scenario 2 – refine an existing plan based on user feedback."""
-    plan = db.query(models.WorkoutPlan).filter(models.WorkoutPlan.id == payload.plan_id).first()
+
+    plan = db.query(models.WorkoutPlan).filter_by(id=payload.plan_id).first()
     if not plan:
-        raise HTTPException(status_code=404, detail="Plan not found.")
+        raise HTTPException(404, "Plan not found")
 
-    current_plan = json.loads(plan.plan_json)
-    updated_plan = refine_plan_from_gemini(current_plan, payload.feedback)
+    updated = refine_plan_from_gemini(
+        json.loads(plan.plan_json),
+        payload.feedback
+    )
 
-    plan.plan_json = json.dumps(updated_plan)
+    plan.plan_json = json.dumps(updated)
     plan.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(plan)
 
-    return {
-        "plan_id": plan.id,
-        "plan": updated_plan,
-        "tip": plan.nutrition_tip,
-    }
+    db.commit()
+
+    return {"plan": updated}
 
 
 @app.get("/tip/{goal}")
 async def tip(goal: str):
-    """Scenario 3 – get a nutrition / recovery tip for a given goal."""
-    tip_text = get_tip_from_gemini(goal)
-    return {"goal": goal, "tip": tip_text}
+    return {"tip": get_tip_from_gemini(goal)}
